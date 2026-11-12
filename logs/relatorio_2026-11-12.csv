@@ -1,0 +1,13 @@
+﻿data_envio,espresso_id,valor,fornecedor,categoria,centro_custo,status,mubisys_id,obs
+2026-11-12T10:25:47,1,150.0,Fornecedor A,alimentacao,Alimentacao,lancada,T-1,
+2026-11-12T10:25:47,2,220.5,Posto B,desconhecida,Despesas Gerais,lancada,T-2,
+2026-11-12T10:25:47,3,0,Uber,transporte,,falha,,valor inválido (<= 0)
+2026-11-12T10:25:47,1,150.0,Fornecedor A,alimentacao,,ja_existia,,pulada (anti-duplicata)
+2026-11-12T10:25:56,1,150.0,Fornecedor A,alimentacao,,ja_existia,,pulada (anti-duplicata)
+2026-11-12T10:25:56,2,220.5,Posto B,desconhecida,,ja_existia,,pulada (anti-duplicata)
+2026-11-12T10:25:56,3,0,Uber,transporte,,falha,,valor inválido (<= 0)
+2026-11-12T10:25:56,1,150.0,Fornecedor A,alimentacao,,ja_existia,,pulada (anti-duplicata)
+2026-11-12T10:26:03,1,150.0,Fornecedor A,alimentacao,Alimentacao,lancada,T-1,
+2026-11-12T10:26:03,2,220.5,Posto B,desconhecida,Despesas Gerais,lancada,T-2,
+2026-11-12T10:26:03,3,0,Uber,transporte,,falha,,valor inválido (<= 0)
+2026-11-12T10:26:03,1,150.0,Fornecedor A,alimentacao,,ja_existia,,pulada (anti-duplicata)

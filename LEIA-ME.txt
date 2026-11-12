@@ -1,0 +1,37 @@
+BRIDGE CMYK — Espresso → Mubisys
+=================================
+
+Programa que sincroniza despesas aprovadas do Espresso para o
+Contas a Pagar do Mubisys (ERP). Roda no Windows.
+
+COMO USAR
+---------
+1) Abra o Bridge CMYK
+2) Aba "Configuração": preencha e salve (credenciais fornecidas pelo financeiro)
+   - Mubisys: publicKey + Access-Token
+   - Espresso: host + token
+3) Aba "Sincronizar": clique em "Sincronizar agora"
+4) O resumo aparece na tela (lançadas / já existiam / falhas)
+
+ONDE FICAM OS LOGS (importante!)
+--------------------------------
+Na pasta do programa (normalmente C:\Users\SEU_USUARIO\AppData\Local\BridgeCMYK):
+  - logs\bridge_2026-11-12.log   → log completo do dia
+  - logs\relatorio_2026-11-12.csv → todas as despesas processadas (abre no Excel)
+
+Se der problema, mande esses dois arquivos para o suporte técnico.
+
+AGENDAR PARA RODAR SOZINHO (opcional)
+-------------------------------------
+1) Abra o "Agendador de Tarefas" do Windows
+2) Criar tarefa básica → programa:
+   C:\Users\SEU_USUARIO\AppData\Local\BridgeCMYK\BridgeCMYK.exe
+   argumentos: --auto
+3) Escolha a frequência (ex.: diariamente às 7h)
+
+O modo --auto roda sem abrir janela, sincroniza e grava nos logs.
+
+SEGURANÇA
+---------
+As credenciais ficam apenas no config.json da máquina (não vão para lugar
+nenhum na internet além das APIs do Espresso e Mubisys).

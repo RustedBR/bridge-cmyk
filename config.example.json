@@ -1,0 +1,20 @@
+{
+  "mubisys": {
+    "base_url": "https://api.mubisys.com/api",
+    "public_key": "",
+    "access_token": ""
+  },
+  "espresso": {
+    "base_url": "",
+    "token": ""
+  },
+  "categoria_map": {
+    "alimentacao": "Alimentacao",
+    "combustivel": "Combustivel",
+    "transporte": "Transporte",
+    "hospedagem": "Hospedagem",
+    "material_escritorio": "Material de Escritorio",
+    "manutencao": "Manutencao"
+  },
+  "centro_custo_padrao": "Despesas Gerais"
+}
