@@ -99,6 +99,170 @@ def _chaves_no_mubisys(cfg: dict) -> tuple[set[str], bool]:
         return set(), False
 
 
+def _normalizar_coluna(nome: str) -> str:
+    """Normaliza nomes de coluna do export do Espresso p/ chaves canônicas."""
+    n = (nome or "").strip().lower()
+    n = n.replace(" ", "_").replace("-", "_").replace("ã", "a").replace("ç", "c")
+    n = n.replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u")
+    n = n.replace("è", "e").replace("à", "a").replace("ô", "o").replace("õ", "o")
+    mapeamentos = {
+        "id": "id",
+        "codigo": "id",
+        "nº": "id",
+        "data": "date",
+        "data_da_despesa": "date",
+        "data_lancamento": "date",
+        "competencia": "date",
+        "valor": "value",
+        "valor_total": "value",
+        "amount": "value",
+        "categoria": "category",
+        "tipo": "category",
+        "classificacao": "category",
+        "fornecedor": "supplier",
+        "estabelecimento": "supplier",
+        "nome_do_fornecedor": "supplier",
+        "descricao": "description",
+        "descricao_da_despesa": "description",
+        "observacoes": "description",
+        "observacao": "description",
+        "motivo": "description",
+        "centro_de_custo": "cost_center",
+        "centro_custo": "cost_center",
+        "status": "status",
+        "situacao": "status",
+    }
+    return mapeamentos.get(n, n)
+
+
+def ler_csv_espresso(caminho: str) -> list[dict]:
+    """Lê o arquivo exportado pelo Espresso (CSV/planilha) e devolve
+    despesas no formato canônico {id, date, value, category, supplier,
+    description, cost_center, status}.
+
+    Aceita separador ';' ou ',' (detecta pelo cabeçalho) e nomes de coluna
+    variados (Data, Valor, Categoria, Fornecedor, Descrição, Status...).
+    """
+    from pathlib import Path
+
+    caminho = Path(caminho)
+    if not caminho.exists():
+        raise EspressoError(f"Arquivo não encontrado: {caminho}")
+
+    if caminho.suffix.lower() == ".xlsx":
+        raise EspressoError(
+            "Formato .xlsx detectado — exporte do Espresso como CSV "
+            "(ou salve a planilha como CSV).")
+
+    with open(caminho, encoding="utf-8-sig", errors="replace") as f:
+        conteudo = f.read()
+
+    # detecta separador pela primeira linha
+    primeira = conteudo.splitlines()[0] if conteudo.splitlines() else ""
+    sep = ";" if primeira.count(";") >= primeira.count(",") else ","
+    leitor = csv.DictReader(
+        conteudo.splitlines(), delimiter=sep)
+
+    campos = [c.strip() for c in (leitor.fieldnames or [])]
+    mapa = {c: _normalizar_coluna(c) for c in campos}
+
+    despesas = []
+    for lin in leitor:
+        if not any((v or "").strip() for v in lin.values()):
+            continue  # linha em branco
+        item = {}
+        for nome_col, chave in mapa.items():
+            item[chave] = (lin.get(nome_col) or "").strip()
+        # ignora linhas não-aprovadas se a coluna existir
+        status = item.get("status", "")
+        if status and status.lower() not in ("", "aprovado", "aprovada",
+                                             "approved", "pago", "paga"):
+            continue
+        valor = item.get("value", "0").replace(".", "").replace(",", ".")
+        try:
+            valor_f = float(valor) if valor else 0.0
+        except ValueError:
+            valor_f = 0.0
+        despesas.append({
+            "id": item.get("id") or item.get("date", ""),
+            "date": item.get("date") or item.get("id"),
+            "value": valor_f,
+            "category": item.get("category", ""),
+            "supplier": item.get("supplier", ""),
+            "description": item.get("description", ""),
+            "cost_center": item.get("cost_center", ""),
+            "status": item.get("status", ""),
+        })
+    log.info("CSV Espresso: %d despesas lidas de %s", len(despesas), caminho)
+    return despesas
+
+
+def processar_csv_espresso(cfg: dict, caminho_csv: str) -> ResultadoSync:
+    """Fluxo 100% por arquivo (SEM APIs): lê export do Espresso → valida →
+    dedupe local → gera CSV de importação do Mubisys."""
+    resultado = ResultadoSync()
+    linhas_rel = []
+    novas = []
+
+    despesas_brutas = ler_csv_espresso(caminho_csv)
+    log.info("Processando %d despesas do arquivo %s",
+             len(despesas_brutas), caminho_csv)
+
+    for d in despesas_brutas:
+        eid = str(d["id"])
+        linha = {
+            "data_processamento": datetime.now().isoformat(timespec="seconds"),
+            "espresso_id": eid,
+            "valor": d["value"],
+            "fornecedor": d.get("supplier") or "Diversos",
+            "categoria": d.get("category", ""),
+            "centro_custo": "",
+            "status": "",
+            "obs": "",
+        }
+
+        if state.already_synced(eid):
+            resultado.ja_existiam += 1
+            linha.update(status="ja_existia",
+                         obs="pulada (já exportada)")
+            linhas_rel.append(linha)
+            log.info("Despesa %s já exportada — pulando", eid)
+            continue
+
+        if not d["value"] or d["value"] <= 0:
+            resultado.falhas += 1
+            linha.update(status="falha", obs="valor inválido (<= 0)")
+            linhas_rel.append(linha)
+            log.warning("Despesa %s com valor inválido — pulada", eid)
+            continue
+
+        despesa = mapear_despesa(cfg, d)
+        linha["centro_custo"] = despesa["centro_custo"]
+        novas.append(despesa)
+        resultado.exportadas += 1
+        linha.update(status="nova")
+        linhas_rel.append(linha)
+        log.info("[OK] %s → R$%.2f (%s) cc=%s",
+                 eid, despesa["valor"], despesa["fornecedor"],
+                 despesa["centro_custo"])
+
+    if novas:
+        destino = config.app_dir() / "importacoes"
+        caminhos = gerar_arquivo_importacao(novas, destino)
+        for despesa in novas:
+            state.mark_synced(
+                despesa["espresso_id"], "CSV",
+                despesa["valor"], despesa["fornecedor"],
+                despesa["data_vencimento"])
+        resultado.detalhe.extend(caminhos)
+        log.info("Arquivo gerado: %s", caminhos[0])
+
+    _gravar_relatorio_csv(linhas_rel)
+    state.set_last_sync(datetime.now().isoformat())
+    log.info("Processamento por CSV concluído: %s", resultado.resumo())
+    return resultado
+
+
 def gerar_arquivo_importacao(despesas: list[dict], destino) -> list[str]:
     """Gera CSV de importação (fluxo principal).
 

@@ -89,9 +89,36 @@ class BridgeApp(tk.Tk):
         aba = ttk.Frame(nb, padding=12)
         nb.add(aba, text="🔁  Sincronizar")
 
-        barra = ttk.Frame(aba)
-        barra.pack(fill="x")
-        self.btn_sync = ttk.Button(barra, text="▶  Sincronizar agora",
+        lbl_titulo = ttk.Label(
+            aba, text="Escolha como entrar as despesas do Espresso:",
+            font=("Segoe UI", 10, "bold"))
+        lbl_titulo.pack(anchor="w")
+
+        # Modo 1: CSV manual (funciona SEM nenhuma API)
+        frame1 = ttk.LabelFrame(aba, text="Modo A — Arquivo do Espresso (sem API)",
+                                padding=8)
+        frame1.pack(fill="x", pady=(8, 0))
+        ttk.Label(
+            frame1,
+            text=("Exporte as despesas do Espresso como CSV/Excel e selecione "
+                  "o arquivo.\nFunciona sem configurar nenhuma API."),
+            wraplength=640, justify="left").pack(anchor="w")
+        self.btn_csv = ttk.Button(frame1, text="📂 Selecionar arquivo do Espresso",
+                                  command=self._rodar_csv)
+        self.btn_csv.pack(anchor="w", pady=(6, 0))
+
+        # Modo 2: API (quando as credenciais forem preenchidas)
+        frame2 = ttk.LabelFrame(aba, text="Modo B — Via API do Espresso",
+                                padding=8)
+        frame2.pack(fill="x", pady=(8, 0))
+        ttk.Label(
+            frame2,
+            text=("Busca as despesas aprovadas direto na API. Requer host + "
+                  "token preenchidos na aba Configuração."),
+            wraplength=640, justify="left").pack(anchor="w")
+        barra = ttk.Frame(frame2)
+        barra.pack(fill="x", pady=(6, 0))
+        self.btn_sync = ttk.Button(barra, text="▶  Buscar via API",
                                    command=self._rodar_sync)
         self.btn_sync.pack(side="left")
         self.btn_abrir_csv = ttk.Button(barra, text="📂 Abrir CSV",
@@ -101,7 +128,7 @@ class BridgeApp(tk.Tk):
         self.lbl_resumo = ttk.Label(barra, text="", foreground="#1a7f37")
         self.lbl_resumo.pack(side="left", padx=16)
 
-        self.txt_log = tk.Text(aba, height=20, state="disabled",
+        self.txt_log = tk.Text(aba, height=16, state="disabled",
                                font=("Consolas", 9), wrap="word")
         self.txt_log.pack(fill="both", expand=True, pady=(10, 0))
         self.txt_log.tag_configure("erro", foreground="#c0392b")
@@ -145,6 +172,31 @@ class BridgeApp(tk.Tk):
         self.lbl_resumo.configure(text="sincronizando…")
         threading.Thread(target=self._sync_worker, args=(cfg,), daemon=True).start()
 
+    def _rodar_csv(self) -> None:
+        from tkinter import filedialog
+
+        caminho = filedialog.askopenfilename(
+            title="Selecionar arquivo exportado do Espresso",
+            filetypes=[("CSV / planilha", "*.csv *.xlsx"),
+                       ("CSV", "*.csv"),
+                       ("Todos os arquivos", "*.*")])
+        if not caminho:
+            return
+        cfg = config.load_config()
+        self.btn_csv.configure(state="disabled")
+        self._ultimo_csv: str | None = None
+        self.lbl_resumo.configure(text="processando arquivo…")
+        threading.Thread(
+            target=self._csv_worker, args=(cfg, caminho), daemon=True).start()
+
+    def _csv_worker(self, cfg: dict, caminho: str) -> None:
+        try:
+            resultado = sync.processar_csv_espresso(cfg, caminho)
+            self.after(0, self._sync_done, resultado, None)
+        except Exception as exc:  # noqa: BLE001 — mostra qualquer erro na tela
+            log.error("Falha ao processar CSV: %s", exc)
+            self.after(0, self._sync_done, None, exc)
+
     def _sync_worker(self, cfg: dict) -> None:
         try:
             resultado = sync.sincronizar(cfg)
@@ -155,6 +207,7 @@ class BridgeApp(tk.Tk):
 
     def _sync_done(self, resultado: ResultadoSync | None, erro: Exception | None) -> None:
         self.btn_sync.configure(state="normal")
+        self.btn_csv.configure(state="normal")
         if erro:
             self.lbl_resumo.configure(text="❌ erro", foreground="#c0392b")
             self._log_linha(f"ERRO: {erro}", tag="erro")

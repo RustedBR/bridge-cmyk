@@ -135,6 +135,54 @@ def test_hibrido_com_pro() -> None:
           "dedupe contra o ERP (zero código extra, só credencial no config)")
 
 
+def make_csv_espresso(caminho: Path) -> None:
+    """Monta um CSV exportado do Espresso (separador ;, nomes variados)."""
+    conteudo = (
+        "Data;Valor;Categoria;Estabelecimento;Descrição;Situação;Nº\n"
+        "2026-11-10;150,00;alimentacao;Fornecedor A;almoço;aprovado;1001\n"
+        "2026-11-11;220,50;Combustivel;Posto B;combustível;Aprovado;1002\n"
+        "2026-11-11;0,00;Transporte;Uber;corrida;aprovado;1003\n"
+        "2026-11-11;99,90;Alimentação;Restaurante C;jantar;REJEITADA;1004\n"
+        "2026-11-11;33,33;consumo;Loja D;material;aprovado;1005\n"
+    )
+    caminho.write_text(conteudo, encoding="utf-8-sig")
+
+
+def test_modo_csv_manual() -> None:
+    """Modo A: processa CSV exportado do Espresso SEM nenhuma API."""
+    cfg = {
+        "mubisys": {"base_url": "https://api.mubisys.com/api",
+                    "public_key": "", "access_token": ""},
+        "espresso": {"base_url": "", "token": ""},   # SEM APIs configuradas
+        "categoria_map": {"alimentacao": "Alimentacao",
+                          "consumo": "Consumo"},
+        "centro_custo_padrao": "Despesas Gerais",
+    }
+    from bridge_cmyk import sync as sync_mod
+
+    csv_in = TMP / "espresso_export.csv"
+    make_csv_espresso(csv_in)
+
+    # isola state para nova execução
+    state.STATE_DB = TMP / "data2" / "state.db"
+    state.STATE_DIR = TMP / "data2"
+
+    res = sync_mod.processar_csv_espresso(cfg, str(csv_in))
+    print("\n== MODO A (CSV manual, sem APIs) ==")
+    print(res.resumo())
+    # 1001, 1002, 1005 exportadas; 1003 valor 0 falha; 1004 rejeitada ignorada
+    assert res.exportadas == 3, f"esperava 3 exportadas, veio {res.exportadas}"
+    assert res.falhas == 1, "esperava 1 falha (valor 0)"
+    assert res.ja_existiam == 0, "nada duplicado na 1ª passada"
+
+    conteudo = Path(res.detalhe[0]).read_text(encoding="utf-8-sig")
+    assert "espresso:1001" in conteudo
+    assert "espresso:1004" not in conteudo, "rejeitada não pode entrar"
+    assert "Alimentacao" in conteudo
+    print("✅ MODO A VALIDADO: funciona sem API nenhuma (CSV exportado do Espresso)")
+
+
 if __name__ == "__main__":
     main()
     test_hibrido_com_pro()
+    test_modo_csv_manual()
