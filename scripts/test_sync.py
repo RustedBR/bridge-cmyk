@@ -65,7 +65,7 @@ def main() -> None:
 
     # 2ª execução: as 3 já foram exportadas → todas puladas
     res2 = sync.sincronizar(cfg)
-    print("\n== RESULTADO 2ª EXECUÇÃO (anti-duplicata) ==")
+    print("\n== RESULTADO 2ª EXECUÇÃO (anti-duplicata local) ==")
     print(res2.resumo())
     assert res2.exportadas == 0, "nada novo na 2ª execução"
     assert res2.ja_existiam == 3, "3 já exportadas puladas"
@@ -82,7 +82,53 @@ def main() -> None:
     assert "Alimentacao" in linhas[1]
 
     print("\n✅ TODOS OS ASSERTES PASSARAM (fluxo principal: CSV de importação)")
+    print("=== CENÁRIO HÍBRIDO: Mubi Pro ATIVADO (credenciais presentes) ===")
+
+
+def test_hibrido_com_pro() -> None:
+    """Simula a CMYK com Mubi Pro: dedupe contra o Mubisys via API.
+    Mesma despesa já lançada lá (ref espresso:9) NÃO pode ser exportada,
+    mesmo sem o Bridge ter exportado antes (estado local vazio)."""
+    cfg_pro = {
+        "mubisys": {"base_url": "https://api.mubisys.com/api",
+                    "public_key": "chavepro", "access_token": "tok"},
+        "espresso": {"base_url": "https://espresso.test", "token": "teste"},
+        "categoria_map": {"alimentacao": "Alimentacao"},
+        "centro_custo_padrao": "Despesas Gerais",
+    }
+
+    class FakeEspressoPro:
+        def despesas_aprovadas(self, since):
+            return [
+                {"id": "9", "value": 50.0, "category": "alimentacao",
+                 "supplier": "Padaria", "date": "2026-11-12",
+                 "description": "café"},
+                {"id": "10", "value": 75.0, "category": "alimentacao",
+                 "supplier": "Lanchonete", "date": "2026-11-12",
+                 "description": "almoço"},
+            ]
+
+    class FakeMubisysPro:
+        def listar_contas_pagar(self, **params):
+            # Já existe título com referência externa espresso:9 no ERP
+            return [{"referencia_externa": "espresso:9"}]
+
+    sync.EspressoClient = lambda *a, **k: FakeEspressoPro()
+    sync.MubisysClient = lambda *a, **k: FakeMubisysPro()
+
+    res = sync.sincronizar(cfg_pro)
+    print(res.resumo())
+    assert res.exportadas == 1, "só a 10 (a 9 já está no Mubisys)"
+    assert res.ja_existiam == 1, "despesa 9 pulada pela consulta ao ERP"
+
+    csv_path = Path(res.detalhe[0])
+    conteudo = csv_path.read_text(encoding="utf-8-sig")
+    assert "espresso:9" not in conteudo, "9 não pode estar no arquivo"
+    assert "espresso:10" in conteudo
+    print("✅ CENÁRIO HÍBRIDO VALIDADO: sem Pro = dedupe local; com Pro = "
+          "dedupe contra o ERP (zero código extra, só credencial no config)")
 
 
 if __name__ == "__main__":
     main()
+    test_hibrido_com_pro()
