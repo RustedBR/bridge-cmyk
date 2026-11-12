@@ -1,4 +1,19 @@
-"""Lógica central da sincronização Espresso → Mubisys."""
+"""Lógica central — Espresso → arquivo de importação → Mubisys.
+
+FLUXO PRINCIPAL (confirmado 2026-11-12):
+1. Busca despesas APROVADAS no Espresso (API sob contrato)
+2. Consulta GET /contas-pagar no Mubisys (API pública) p/ deduplicar de
+   verdade contra o que JÁ está lançado lá (quando credenciais existem)
+3. Filtra: já exportadas (state local) + já no Mubisys + valor inválido
+4. GERA ARQUIVO CSV DE IMPORTAÇÃO que o financeiro sobe no painel
+   do Mubisys (Financeiro → Contas a Pagar → Importar)
+5. Registra no estado local o que foi para o arquivo (anti-duplicata)
+
+A escrita via POST /contas-pagar NÃO existe na API pública do Mubisys
+(56 paths parseados, contas-pagar é só GET) — por isso o arquivo de
+importação é o mecanismo oficial. Se a Mubisys liberar endpoints de
+escrita via contrato, um dia esse módulo ganha um modo direto.
+"""
 from __future__ import annotations
 
 import csv
@@ -15,14 +30,14 @@ log = logging.getLogger("bridge.sync")
 
 @dataclass
 class ResultadoSync:
-    lancadas: int = 0
-    ja_existiam: int = 0
-    falhas: int = 0
+    exportadas: int = 0          # foram para o arquivo de importação
+    ja_existiam: int = 0         # puladas (estado local ou Mubisys)
+    falhas: int = 0              # valor inválido / erro de comunicação
     detalhe: list[str] = field(default_factory=list)
 
     def resumo(self) -> str:
         return (
-            f"✅ {self.lancadas} lançadas  ·  "
+            f"📄 {self.exportadas} novas no arquivo  ·  "
             f"⏭️ {self.ja_existiam} já existiam  ·  "
             f"⚠️ {self.falhas} falhas"
         )
@@ -45,34 +60,45 @@ def mapear_despesa(cfg: dict, d: dict) -> dict:
     }
 
 
-def _payload_mubisys(despesa: dict) -> dict:
-    """Corpo do POST /contas-pagar (se a Mubisys liberar escrita).
+def _chaves_no_mubisys(cfg: dict) -> set[str]:
+    """Chaves externas já lançadas no Mubisys (GET /contas-pagar).
 
-    ⚠️ NÃO documentado na API pública (verificado 2026-11-12: 56 paths,
-    contas-pagar só GET). Mantido como rascunho p/ quando houver contrato.
+    Usada para dedupe real: não exportar o que o financeiro já lançou
+    manualmente. Retorna conjunto de `referencia_externa` encontradas.
+    Retorna vazio se a API não estiver configurada/disponível.
     """
-    return {
-        "valor": despesa["valor"],
-        "descricao": despesa["descricao"],
-        "fornecedor": despesa["fornecedor"],
-        "data_vencimento": despesa["data_vencimento"],
-        "centro_custo": despesa["centro_custo"],
-        "referencia_externa": f"espresso:{despesa['espresso_id']}",
-    }
+    m = cfg.get("mubisys", {})
+    if not (m.get("public_key") and m.get("access_token")):
+        return set()
+    try:
+        cliente = MubisysClient(
+            m.get("base_url", "https://api.mubisys.com/api"),
+            m["public_key"], m["access_token"])
+        titulos = cliente.listar_contas_pagar(
+            status="TODOS", filtrodata="VENCIMENTO",
+            datainicial=(datetime.now() - timedelta(days=90)).date().isoformat(),
+            datafinal=datetime.now().date().isoformat())
+        chaves = set()
+        for t in titulos:
+            ref = (t.get("referencia_externa") or t.get("referencia") or "").strip()
+            if ref:
+                chaves.add(ref)
+        log.info("Mubisys: %d títulos consultados, %d com referência externa",
+                 len(titulos), len(chaves))
+        return chaves
+    except (MubisysError, EspressoError) as exc:
+        log.warning("Consulta ao Mubisys indisponível (%s) — dedupe via estado local",
+                    exc)
+        return set()
 
 
 def gerar_arquivo_importacao(despesas: list[dict], destino) -> list[str]:
-    """Gera CSV/planilha no formato de importação do Mubisys (painel).
+    """Gera CSV de importação (fluxo principal).
 
-    Fallback comprovado: como a API pública do Mubisys não tem POST
-    em contas-pagar (verificado 2026-11-12), o programa gera um arquivo
-    que o financeiro importa manualmente no painel do Mubisys.
-    Retorna caminhos dos arquivos gerados.
-
+    Formato genérico UTF-8 BOM + separador ';' (Excel abre direto).
     NOTA: ajustar o cabeçalho ao modelo de importação real do painel
-    (Financeiro → Contas a Pagar → Importar). Formato genérico abaixo.
+    Mubisys (Financeiro → Contas a Pagar → Importar) quando disponível.
     """
-    import csv as _csv
     from pathlib import Path
 
     pasta = Path(destino)
@@ -84,27 +110,25 @@ def gerar_arquivo_importacao(despesas: list[dict], destino) -> list[str]:
         "centro_custo", "referencia_externa",
     ]
     with open(caminho, "w", newline="", encoding="utf-8-sig") as f:
-        writer = _csv.DictWriter(f, fieldnames=campos, delimiter=";")
+        writer = csv.DictWriter(f, fieldnames=campos, delimiter=";")
         writer.writeheader()
         for d in despesas:
-            writer.writerow(
-                {
-                    "data_vencimento": d.get("data_vencimento") or d.get("date"),
-                    "valor": f"{d['valor']:.2f}",
-                    "descricao": d.get("description", "")[:120],
-                    "fornecedor": d.get("supplier") or "Diversos",
-                    "centro_custo": _categoria_para_centro_custo(
-                        _CONFIG_GLOBAL, d.get("category", "")),
-                    "referencia_externa": f"espresso:{d.get('id')}",
-                }
-            )
+            # despesas já mapeadas (mapear_despesa) ou cruas do Espresso
+            escritor = {
+                "data_vencimento": (d.get("data_vencimento")
+                                    or d.get("due_date") or d.get("date")),
+                "valor": f"{d['valor']:.2f}",
+                "descricao": (d.get("descricao") or d.get("description") or "")[:120],
+                "fornecedor": d.get("fornecedor") or d.get("supplier") or "Diversos",
+                "centro_custo": (d.get("centro_custo")
+                                 or _categoria_para_centro_custo(
+                                     d.get("_cfg", {}), d.get("category", ""))
+                                 or "Despesas Gerais"),
+                "referencia_externa": f"espresso:{d.get('espresso_id') or d.get('id')}",
+            }
+            writer.writerow(escritor)
     log.info("Arquivo de importação gerado: %s", caminho)
     return [str(caminho)]
-
-
-# Config global p/ funções standalone (setada pela GUI antes de chamar)
-_CONFIG_GLOBAL: dict = {}
-
 
 
 def _gravar_relatorio_csv(linhas: list[dict]) -> None:
@@ -119,8 +143,8 @@ def _gravar_relatorio_csv(linhas: list[dict]) -> None:
         writer = csv.DictWriter(
             f,
             fieldnames=[
-                "data_envio", "espresso_id", "valor", "fornecedor",
-                "categoria", "centro_custo", "status", "mubisys_id", "obs",
+                "data_processamento", "espresso_id", "valor", "fornecedor",
+                "categoria", "centro_custo", "status", "obs",
             ],
         )
         if novo:
@@ -129,7 +153,7 @@ def _gravar_relatorio_csv(linhas: list[dict]) -> None:
 
 
 def sincronizar(cfg: dict, since: str | None = None, dry_run: bool = False) -> ResultadoSync:
-    """Fluxo completo de uma sincronização. Retorna resumo."""
+    """Fluxo completo: Espresso → validação/dedupe → arquivo de importação."""
     if not config.is_configured(cfg):
         faltam = config.missing_items(cfg)
         raise EspressoError("Configuração incompleta — faltam: " + ", ".join(faltam))
@@ -144,37 +168,35 @@ def sincronizar(cfg: dict, since: str | None = None, dry_run: bool = False) -> R
     espresso = EspressoClient(
         cfg["espresso"]["base_url"], cfg["espresso"]["token"]
     )
-    mubisys = MubisysClient(
-        cfg["mubisys"]["base_url"],
-        cfg["mubisys"]["public_key"],
-        cfg["mubisys"]["access_token"],
-    )
 
-    despesas = espresso.despesas_aprovadas(inicio_filtro)
-    log.info("Espresso retornou %d despesas aprovadas", len(despesas))
+    despesas_brutas = espresso.despesas_aprovadas(inicio_filtro)
+    log.info("Espresso retornou %d despesas aprovadas", len(despesas_brutas))
 
+    ja_no_mubisys = _chaves_no_mubisys(cfg)
+    novas = []
     resultado = ResultadoSync()
     linhas_rel = []
 
-    for d in despesas:
-        eid = d["id"]
+    for d in despesas_brutas:
+        eid = str(d["id"])
+        ref = f"espresso:{eid}"
         linha = {
-            "data_envio": datetime.now().isoformat(timespec="seconds"),
+            "data_processamento": datetime.now().isoformat(timespec="seconds"),
             "espresso_id": eid,
             "valor": d["value"],
             "fornecedor": d.get("supplier") or "Diversos",
             "categoria": d.get("category", ""),
             "centro_custo": "",
             "status": "",
-            "mubisys_id": "",
             "obs": "",
         }
 
-        if state.already_synced(eid):
+        if state.already_synced(eid) or ref in ja_no_mubisys:
             resultado.ja_existiam += 1
-            linha.update(status="ja_existia", obs="pulada (anti-duplicata)")
+            linha.update(status="ja_existia",
+                         obs="pulada (já exportada/registrada)")
             linhas_rel.append(linha)
-            log.info("Despesa %s já sincronizada — pulando", eid)
+            log.info("Despesa %s já registrada — pulando", eid)
             continue
 
         if not d["value"] or d["value"] <= 0:
@@ -186,30 +208,26 @@ def sincronizar(cfg: dict, since: str | None = None, dry_run: bool = False) -> R
 
         despesa = mapear_despesa(cfg, d)
         linha["centro_custo"] = despesa["centro_custo"]
+        novas.append(despesa)
+        resultado.exportadas += 1
+        linha.update(status="nova")
+        linhas_rel.append(linha)
+        log.info("[OK] %s → R$%.2f (%s) cc=%s",
+                 eid, despesa["valor"], despesa["fornecedor"],
+                 despesa["centro_custo"])
 
-        if dry_run:
-            resultado.lancadas += 1
-            linha.update(status="dry_run", obs="não enviada (dry-run)")
-            linhas_rel.append(linha)
-            log.info("[DRY] lançaria %s → R$%.2f (%s) cc=%s",
-                     eid, despesa["valor"], despesa["fornecedor"],
-                     despesa["centro_custo"])
-            continue
-
-        try:
-            mid = mubisys.criar_contas_pagar(_payload_mubisys(despesa))
-            state.mark_synced(eid, mid, despesa["valor"],
-                              despesa["fornecedor"], despesa["data_vencimento"])
-            resultado.lancadas += 1
-            linha.update(status="lancada", mubisys_id=mid)
-            linhas_rel.append(linha)
-            log.info("Despesa %s lançada no Mubisys (id=%s, R$%.2f)",
-                     eid, mid, despesa["valor"])
-        except (MubisysError, EspressoError) as exc:
-            resultado.falhas += 1
-            linha.update(status="falha", obs=str(exc)[:150])
-            linhas_rel.append(linha)
-            log.error("Falha ao lançar despesa %s: %s", eid, exc)
+    if not dry_run and novas:
+        destino = config.app_dir() / "importacoes"
+        caminhos = gerar_arquivo_importacao(novas, destino)
+        for despesa in novas:
+            state.mark_synced(
+                despesa["espresso_id"], "CSV",
+                despesa["valor"], despesa["fornecedor"],
+                despesa["data_vencimento"])
+        resultado.detalhe.extend(caminhos)
+        log.info("Arquivo gerado: %s", caminhos[0])
+    elif not dry_run:
+        log.info("Nenhuma despesa nova — arquivo não gerado")
 
     _gravar_relatorio_csv(linhas_rel)
     if not dry_run:

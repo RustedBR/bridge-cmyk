@@ -118,7 +118,11 @@ class BridgeApp(tk.Tk):
     def _atualizar_status_config(self) -> None:
         cfg = config.load_config()
         if config.is_configured(cfg):
-            self.status_config.set("✅ Configuração completa — pronto para sincronizar")
+            msg = "✅ Configuração completa — pronto para gerar o arquivo"
+            if not (cfg.get("mubisys", {}).get("public_key")
+                    and cfg.get("mubisys", {}).get("access_token")):
+                msg += "  (Mubisys opcional: só para checar duplicatas)"
+            self.status_config.set(msg)
         else:
             faltam = config.missing_items(cfg)
             self.status_config.set("⚠️  Falta: " + ", ".join(faltam))
@@ -151,6 +155,10 @@ class BridgeApp(tk.Tk):
         else:
             self.lbl_resumo.configure(text=resultado.resumo(), foreground="#1a7f37")
             self._log_linha("\n" + resultado.resumo(), tag="ok")
+            if resultado.detalhe:
+                self._log_linha(f"📄 Arquivo gerado: {resultado.detalhe[0]}", tag="ok")
+                self._log_linha(
+                    "→ Importe no Mubisys: Financeiro › Contas a Pagar › Importar")
 
     _def = None
 

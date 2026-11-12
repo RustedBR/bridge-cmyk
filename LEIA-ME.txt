@@ -1,25 +1,31 @@
 BRIDGE CMYK — Espresso → Mubisys
 =================================
 
-Programa que sincroniza despesas aprovadas do Espresso para o
-Contas a Pagar do Mubisys (ERP). Roda no Windows.
+Programa que gera o arquivo de importação de despesas aprovadas do
+Espresso para o Contas a Pagar do Mubisys (ERP). Roda no Windows.
 
 COMO USAR
 ---------
 1) Abra o Bridge CMYK
-2) Aba "Configuração": preencha e salve (credenciais fornecidas pelo financeiro)
-   - Mubisys: publicKey + Access-Token
-   - Espresso: host + token
+2) Aba "Configuração": preencha e salve
+   - Espresso: host + token (obrigatórios)
+   - Mubisys: publicKey + Access-Token (opcionais — só para não
+     exportar despesa que já foi lançada no sistema)
 3) Aba "Sincronizar": clique em "Sincronizar agora"
-4) O resumo aparece na tela (lançadas / já existiam / falhas)
+4) O programa gera o arquivo em  importacoes\importacao_mubisys_<data>.csv
+5) Importe esse arquivo no Mubisys:
+   Financeiro > Contas a Pagar > Importar
+   (o financeiro da CMYK sabe onde fica)
+6) O resumo aparece na tela (novas / já existiam / falhas)
 
 ONDE FICAM OS LOGS (importante!)
 --------------------------------
 Na pasta do programa (normalmente C:\Users\SEU_USUARIO\AppData\Local\BridgeCMYK):
   - logs\bridge_2026-11-12.log   → log completo do dia
   - logs\relatorio_2026-11-12.csv → todas as despesas processadas (abre no Excel)
+  - importacoes\                  → arquivos CSV gerados para importar no Mubisys
 
-Se der problema, mande esses dois arquivos para o suporte técnico.
+Se der problema, mande esses arquivos para o suporte técnico.
 
 AGENDAR PARA RODAR SOZINHO (opcional)
 -------------------------------------
@@ -29,7 +35,7 @@ AGENDAR PARA RODAR SOZINHO (opcional)
    argumentos: --auto
 3) Escolha a frequência (ex.: diariamente às 7h)
 
-O modo --auto roda sem abrir janela, sincroniza e grava nos logs.
+O modo --auto roda sem abrir janela, gera o arquivo e grava nos logs.
 
 SEGURANÇA
 ---------

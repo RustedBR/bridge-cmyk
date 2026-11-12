@@ -65,22 +65,15 @@ def save_config(cfg: dict) -> None:
 
 
 def is_configured(cfg: dict) -> bool:
-    m = cfg.get("mubisys", {})
+    """Config OK = Espresso configurado (Mubisys é OPCIONAL: seu GET serve
+    só para dedupe; o fluxo principal gera arquivo de importação)."""
     e = cfg.get("espresso", {})
-    return bool(
-        m.get("public_key") and m.get("access_token")
-        and e.get("base_url") and e.get("token")
-    )
+    return bool(e.get("base_url") and e.get("token"))
 
 
 def missing_items(cfg: dict) -> list[str]:
     faltam = []
-    m = cfg.get("mubisys", {})
     e = cfg.get("espresso", {})
-    if not m.get("public_key"):
-        faltam.append("Mubisys publicKey")
-    if not m.get("access_token"):
-        faltam.append("Mubisys Access-Token")
     if not e.get("base_url"):
         faltam.append("Espresso host (base_url)")
     if not e.get("token"):

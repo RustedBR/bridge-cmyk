@@ -11,20 +11,23 @@ externo nem de cronjob no PC do desenvolvedor.**
 ## O que o programa faz (fluxo)
 
 1. **Configuração (1ª vez)** — usuário abre a aba *Configuração*, preenche:
-   - Mubisys: `publicKey` + `Access-Token`
-   - Espresso: host + token da API
+   - Espresso: host + token da API (obrigatórios)
+   - Mubisys: `publicKey` + `Access-Token` (OPCIONAIS — usados só para
+     consultar `GET /contas-pagar` e não exportar despesa que já foi lançada)
    - Mapeamento categoria Espresso → centro de custo Mubisys
    - Salva em `config.json` (fica ao lado do .exe)
-2. **Sincronizar** — usuário clica em *Sincronizar agora*:
+2. **Gerar arquivo de importação** — usuário clica em *Sincronizar*:
    - Conecta no Espresso e busca despesas **aprovadas** desde o último sync
+   - (Se Mubisys configurado) consulta `GET /contas-pagar` e pula as que já
+     estão lá — deduplicação real contra o ERP
+   - **Anti-duplicata local**: pula despesas já exportadas (banco `data/state.db`)
    - Mapeia a categoria de cada despesa para o centro de custo do Mubisys
-   - **Anti-duplicata**: consulta o banco local (`data/state.db`) e pula o que já foi enviado
-   - Cria um título de Contas a Pagar no Mubisys por despesa (via `POST /contas-pagar`)
-   - Registra cada envio no banco local com a referência externa `espresso:<id>`
-   - Mostra resumo na tela: lançadas ✓, já existiam ⏭️, falhas ⚠️
-3. **Logs** — tudo é gravado em:
-   - `logs/bridge_YYYY-MM-DD.log` (diário, retém 30 dias)
-   - `logs/relatorio_YYYY-MM-DD.csv` (uma linha por despesa processada)
+   - Gera **`importacoes/importacao_mubisys_YYYY-MM-DD.csv`** (UTF-8 + `;`,
+     abre no Excel) na pasta do programa
+   - Mostra resumo na tela: novas 📄 / já existiam ⏭️ / falhas ⚠️
+3. **Importar no Mubisys (pelo financeiro)** — no painel do Mubisys:
+   `Financeiro › Contas a Pagar › Importar` → selecionar o CSV gerado.
+   *(formato do cabeçalho ajustável ao modelo real de importação do painel)*
 
 ## Como executar
 

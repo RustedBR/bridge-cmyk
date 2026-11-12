@@ -1,11 +1,14 @@
-"""Teste offline da lógica de sincronização (sem APIs reais)."""
+"""Teste offline da lógica de sincronização (sem APIs reais).
+
+Valida o FLUXO PRINCIPAL: Espresso → dedupe → arquivo CSV de importação.
+"""
 from __future__ import annotations
 
 import sys
 import tempfile
 from pathlib import Path
 
-# Aponta o pacote para src/ e força config app_dir() para um dir temporário
+# Aponta o pacote para src/ e isola config/state em dir temporário
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
@@ -13,10 +16,10 @@ import bridge_cmyk.config as config  # noqa: E402
 from bridge_cmyk import state  # noqa: E402
 
 TMP = Path(tempfile.mkdtemp(prefix="bridge_test_"))
-# Isola config E state em um dir temporário (o teste não toca dados reais)
 config.CONFIG_PATH = TMP / "config.json"
 state.STATE_DIR = TMP / "data"
 state.STATE_DB = state.STATE_DIR / "state.db"
+config.app_dir = lambda: TMP  # type: ignore[assignment]  # noqa: SLF001
 
 from bridge_cmyk import sync  # noqa: E402
 
@@ -24,16 +27,13 @@ from bridge_cmyk import sync  # noqa: E402
 def main() -> None:
     cfg = {
         "mubisys": {"base_url": "https://api.mubisys.com/api",
-                    "public_key": "teste", "access_token": "teste"},
+                    "public_key": "", "access_token": ""},
         "espresso": {"base_url": "https://espresso.test",
                      "token": "teste"},
         "categoria_map": {"alimentacao": "Alimentacao",
                           "combustivel": "Combustivel"},
         "centro_custo_padrao": "Despesas Gerais",
     }
-
-    # Fake: 3 despesas, uma repetida no meio
-    chamadas_mubisys = []
 
     class FakeEspresso:
         def despesas_aprovadas(self, since):
@@ -47,35 +47,41 @@ def main() -> None:
                 {"id": "3", "value": 0, "category": "transporte",
                  "supplier": "Uber", "date": "2026-11-11",
                  "description": "corrida"},
-                {"id": "1", "value": 150.0, "category": "alimentacao",
-                 "supplier": "Fornecedor A", "date": "2026-11-10",
-                 "description": "almoço (duplicada)"},
+                {"id": "4", "value": 99.9, "category": "alimentacao",
+                 "supplier": "Restaurante C", "date": "2026-11-11",
+                 "description": "jantar"},
             ]
 
-    class FakeMubisys:
-        def criar_contas_pagar(self, titulo):
-            chamadas_mubisys.append(titulo)
-            return f"T-{len(chamadas_mubisys)}"
-
-    # monkeypatch os clientes no namespace de sync (que é de onde eles vêm)
     sync.EspressoClient = lambda *a, **k: FakeEspresso()
-    sync.MubisysClient = lambda *a, **k: FakeMubisys()
 
     res = sync.sincronizar(cfg)
-    print("== RESULTADO ==")
-    print(f"lancadas={res.lancadas} ja_existiam={res.ja_existiam} falhas={res.falhas}")
-    print("\n== Payloads enviados ao Mubisys ==")
-    for p in chamadas_mubisys:
-        print(p)
-    print(f"\n== state.db: {state.sync_count()} registros ==")
+    print("== RESULTADO 1ª EXECUÇÃO ==")
+    print(res.resumo())
+    print("arquivos:", res.detalhe)
 
-    assert res.lancadas == 2, "esperava 2 lançadas (mapeada + categoria desconhecida -> padrão)"
-    assert res.ja_existiam == 1, "esperava 1 duplicada pulada"
+    assert res.exportadas == 3, "esperava 3 exportadas (1, 2, 4)"
+    assert res.ja_existiam == 0, "nenhuma duplicada na 1ª execução"
     assert res.falhas == 1, "esperava 1 falha (valor 0)"
-    assert chamadas_mubisys[0]["centro_custo"] == "Alimentacao"
-    assert chamadas_mubisys[0]["referencia_externa"] == "espresso:1"
-    assert chamadas_mubisys[1]["centro_custo"] == "Despesas Gerais"
-    print("\n✅ TODOS OS ASSERTES PASSARAM (lógica de mapeamento, dedupe e validação OK)")
+
+    # 2ª execução: as 3 já foram exportadas → todas puladas
+    res2 = sync.sincronizar(cfg)
+    print("\n== RESULTADO 2ª EXECUÇÃO (anti-duplicata) ==")
+    print(res2.resumo())
+    assert res2.exportadas == 0, "nada novo na 2ª execução"
+    assert res2.ja_existiam == 3, "3 já exportadas puladas"
+
+    # Valida conteúdo do CSV gerado
+    csv_path = Path(res.detalhe[0])
+    linhas = csv_path.read_text(encoding="utf-8-sig").strip().splitlines()
+    print("\n== CSV ==")
+    print("\n".join(linhas))
+    assert linhas[0] == (
+        "data_vencimento;valor;descricao;fornecedor;centro_custo;referencia_externa"
+    )
+    assert "espresso:1" in linhas[1]
+    assert "Alimentacao" in linhas[1]
+
+    print("\n✅ TODOS OS ASSERTES PASSARAM (fluxo principal: CSV de importação)")
 
 
 if __name__ == "__main__":
