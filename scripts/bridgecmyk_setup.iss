@@ -6,7 +6,7 @@
 #define AppExe "BridgeCMYK.exe"
 
 [Setup]
-AppId={{8F2C6A1E-3D77-4B1E-9E54-BRIDGE-CMYK01}
+AppId={{B5DCA85A-F2E4-4DC4-A42B-8C8C3A477C0E}
 AppName={#AppName}
 AppVersion={#AppVersion}
 DefaultDirName={localappdata}\BridgeCMYK

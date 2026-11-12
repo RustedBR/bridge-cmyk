@@ -39,6 +39,21 @@ jobs:
           Copy-Item LEIA-ME.txt dist\LEIA-ME.txt
           Compress-Archive -Path dist\* -DestinationPath BridgeCMYK-win64.zip -Force
 
+      - name: Instalar Inno Setup (compilador do instalador assistente)
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe nao encontrado" }
+          Write-Host "Inno Setup OK: $iscc"
+
+      - name: Compilar instalador assistente (BridgeCMYKSetup.exe)
+        shell: pwsh
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" scripts\bridgecmyk_setup.iss | Out-Host
+          if (-not (Test-Path dist\BridgeCMYKSetup-0.1.0.exe)) { throw "Instalador nao gerado" }
+          Get-Item dist\BridgeCMYKSetup-0.1.0.exe | Select-Object Name, Length
+
       - name: Upload artefato (download direto na aba Actions)
         uses: actions/upload-artifact@v4
         with:
@@ -46,8 +61,9 @@ jobs:
           path: |
             BridgeCMYK-win64.zip
             dist/BridgeCMYK.exe
+            dist/BridgeCMYKSetup-0.1.0.exe
 
-      - name: Criar/atualizar Release com o .exe
+      - name: Criar/atualizar Release com .exe + instalador
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-latest
@@ -55,12 +71,18 @@ jobs:
           body: |
             Última versão compilada automaticamente.
 
-            - **BridgeCMYK.exe** — programa completo (portátil: basta executar)
+            **Para usuário comum (instalador assistente):**
+            - **BridgeCMYKSetup-0.1.0.exe** — instalador com assistente
+              (próximo → próximo → instalar, atalho no menu Iniciar)
+
+            **Para uso portátil:**
+            - **BridgeCMYK.exe** — programa completo (basta executar)
             - **BridgeCMYK-win64.zip** — .exe + config.json + LEIA-ME.txt
 
-            Para o instalador com assistente, compilar localmente com
-            `scripts/bridgecmyk_setup.iss` (Inno Setup).
+            Após instalar, abra o Bridge CMYK, preencha a aba Configuração
+            (credenciais do financeiro) e clique em Sincronizar.
           files: |
             dist/BridgeCMYK.exe
             BridgeCMYK-win64.zip
+            dist/BridgeCMYKSetup-0.1.0.exe
           generate_release_notes: false
