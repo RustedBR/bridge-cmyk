@@ -62,6 +62,9 @@ def main() -> None:
     assert res.exportadas == 3, "esperava 3 exportadas (1, 2, 4)"
     assert res.ja_existiam == 0, "nenhuma duplicada na 1ª execução"
     assert res.falhas == 1, "esperava 1 falha (valor 0)"
+    assert res.dedupe_erp is False, "sem credenciais Mubisys → sem consulta ao ERP"
+    assert res.precisa_revisao_duplicata is True, (
+        "sem Pro + exportadas → deve avisar para revisar duplicatas")
 
     # 2ª execução: as 3 já foram exportadas → todas puladas
     res2 = sync.sincronizar(cfg)
@@ -120,6 +123,9 @@ def test_hibrido_com_pro() -> None:
     print(res.resumo())
     assert res.exportadas == 1, "só a 10 (a 9 já está no Mubisys)"
     assert res.ja_existiam == 1, "despesa 9 pulada pela consulta ao ERP"
+    assert res.dedupe_erp is True, "com credenciais → consultou o ERP"
+    assert res.precisa_revisao_duplicata is False, (
+        "com Pro + consulta ok → sem aviso de revisão")
 
     csv_path = Path(res.detalhe[0])
     conteudo = csv_path.read_text(encoding="utf-8-sig")

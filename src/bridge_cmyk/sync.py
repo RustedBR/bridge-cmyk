@@ -33,6 +33,7 @@ class ResultadoSync:
     exportadas: int = 0          # foram para o arquivo de importação
     ja_existiam: int = 0         # puladas (estado local ou Mubisys)
     falhas: int = 0              # valor inválido / erro de comunicação
+    dedupe_erp: bool = False     # True = consultou o Mubisys (Mubi Pro)
     detalhe: list[str] = field(default_factory=list)
 
     def resumo(self) -> str:
@@ -41,6 +42,11 @@ class ResultadoSync:
             f"⏭️ {self.ja_existiam} já existiam  ·  "
             f"⚠️ {self.falhas} falhas"
         )
+
+    @property
+    def precisa_revisao_duplicata(self) -> bool:
+        """Sem Mubi Pro (dedupe só local) + algo exportado → revisar."""
+        return (not self.dedupe_erp) and self.exportadas > 0
 
 
 def _categoria_para_centro_custo(cfg: dict, categoria: str) -> str:
@@ -60,16 +66,17 @@ def mapear_despesa(cfg: dict, d: dict) -> dict:
     }
 
 
-def _chaves_no_mubisys(cfg: dict) -> set[str]:
+def _chaves_no_mubisys(cfg: dict) -> tuple[set[str], bool]:
     """Chaves externas já lançadas no Mubisys (GET /contas-pagar).
 
-    Usada para dedupe real: não exportar o que o financeiro já lançou
-    manualmente. Retorna conjunto de `referencia_externa` encontradas.
-    Retorna vazio se a API não estiver configurada/disponível.
+    Retorna (conjunto de referências, consultou_erp):
+    - consultou_erp=False quando não há credenciais Mubisys (sem Pro) ou a
+      consulta falhou → dedupe fica só no estado local.
     """
     m = cfg.get("mubisys", {})
     if not (m.get("public_key") and m.get("access_token")):
-        return set()
+        log.info("Mubisys sem credenciais — dedupe apenas local (Mubi Pro opcional)")
+        return set(), False
     try:
         cliente = MubisysClient(
             m.get("base_url", "https://api.mubisys.com/api"),
@@ -85,11 +92,11 @@ def _chaves_no_mubisys(cfg: dict) -> set[str]:
                 chaves.add(ref)
         log.info("Mubisys: %d títulos consultados, %d com referência externa",
                  len(titulos), len(chaves))
-        return chaves
+        return chaves, True
     except (MubisysError, EspressoError) as exc:
         log.warning("Consulta ao Mubisys indisponível (%s) — dedupe via estado local",
                     exc)
-        return set()
+        return set(), False
 
 
 def gerar_arquivo_importacao(despesas: list[dict], destino) -> list[str]:
@@ -172,9 +179,10 @@ def sincronizar(cfg: dict, since: str | None = None, dry_run: bool = False) -> R
     despesas_brutas = espresso.despesas_aprovadas(inicio_filtro)
     log.info("Espresso retornou %d despesas aprovadas", len(despesas_brutas))
 
-    ja_no_mubisys = _chaves_no_mubisys(cfg)
-    novas = []
     resultado = ResultadoSync()
+    ja_no_mubisys, consultou_erp = _chaves_no_mubisys(cfg)
+    resultado.dedupe_erp = consultou_erp
+    novas = []
     linhas_rel = []
 
     for d in despesas_brutas:

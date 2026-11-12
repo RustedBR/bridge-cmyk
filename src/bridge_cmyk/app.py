@@ -94,6 +94,10 @@ class BridgeApp(tk.Tk):
         self.btn_sync = ttk.Button(barra, text="▶  Sincronizar agora",
                                    command=self._rodar_sync)
         self.btn_sync.pack(side="left")
+        self.btn_abrir_csv = ttk.Button(barra, text="📂 Abrir CSV",
+                                        state="disabled",
+                                        command=self._abrir_ultimo_csv)
+        self.btn_abrir_csv.pack(side="left", padx=(10, 0))
         self.lbl_resumo = ttk.Label(barra, text="", foreground="#1a7f37")
         self.lbl_resumo.pack(side="left", padx=16)
 
@@ -136,6 +140,8 @@ class BridgeApp(tk.Tk):
                                    "\n- ".join(faltam))
             return
         self.btn_sync.configure(state="disabled")
+        self.btn_abrir_csv.configure(state="disabled")
+        self._ultimo_csv: str | None = None
         self.lbl_resumo.configure(text="sincronizando…")
         threading.Thread(target=self._sync_worker, args=(cfg,), daemon=True).start()
 
@@ -156,9 +162,20 @@ class BridgeApp(tk.Tk):
             self.lbl_resumo.configure(text=resultado.resumo(), foreground="#1a7f37")
             self._log_linha("\n" + resultado.resumo(), tag="ok")
             if resultado.detalhe:
+                self._ultimo_csv = resultado.detalhe[0]
                 self._log_linha(f"📄 Arquivo gerado: {resultado.detalhe[0]}", tag="ok")
                 self._log_linha(
                     "→ Importe no Mubisys: Financeiro › Contas a Pagar › Importar")
+                if resultado.precisa_revisao_duplicata:
+                    self._log_linha(
+                        "⚠️  Sem Mubi Pro: o programa não consegue checar o que já "
+                        "foi lançado no Mubisys.", tag="erro")
+                    self._log_linha(
+                        "    ANTES de importar, confira no Mubisys se essas despesas "
+                        "não já foram lançadas manualmente.", tag="erro")
+                    self._log_linha(
+                        "    📌 Botão abaixo abre o arquivo para conferir.", tag="erro")
+                    self.btn_abrir_csv.configure(state="normal")
 
     _def = None
 
@@ -167,6 +184,11 @@ class BridgeApp(tk.Tk):
         self.txt_log.insert("end", texto + "\n", tag)
         self.txt_log.see("end")
         self.txt_log.configure(state="disabled")
+
+    def _abrir_ultimo_csv(self) -> None:
+        caminho = getattr(self, "_ultimo_csv", None)
+        if caminho:
+            self._abrir_pasta(config.app_dir() / "importacoes")
 
     @staticmethod
     def _abrir_pasta(pasta) -> None:
