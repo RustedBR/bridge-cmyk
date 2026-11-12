@@ -46,7 +46,11 @@ def mapear_despesa(cfg: dict, d: dict) -> dict:
 
 
 def _payload_mubisys(despesa: dict) -> dict:
-    """Corpo do POST /contas-pagar (ajustar ao OpenAPI real)."""
+    """Corpo do POST /contas-pagar (se a Mubisys liberar escrita).
+
+    ⚠️ NÃO documentado na API pública (verificado 2026-11-12: 56 paths,
+    contas-pagar só GET). Mantido como rascunho p/ quando houver contrato.
+    """
     return {
         "valor": despesa["valor"],
         "descricao": despesa["descricao"],
@@ -55,6 +59,52 @@ def _payload_mubisys(despesa: dict) -> dict:
         "centro_custo": despesa["centro_custo"],
         "referencia_externa": f"espresso:{despesa['espresso_id']}",
     }
+
+
+def gerar_arquivo_importacao(despesas: list[dict], destino) -> list[str]:
+    """Gera CSV/planilha no formato de importação do Mubisys (painel).
+
+    Fallback comprovado: como a API pública do Mubisys não tem POST
+    em contas-pagar (verificado 2026-11-12), o programa gera um arquivo
+    que o financeiro importa manualmente no painel do Mubisys.
+    Retorna caminhos dos arquivos gerados.
+
+    NOTA: ajustar o cabeçalho ao modelo de importação real do painel
+    (Financeiro → Contas a Pagar → Importar). Formato genérico abaixo.
+    """
+    import csv as _csv
+    from pathlib import Path
+
+    pasta = Path(destino)
+    pasta.mkdir(parents=True, exist_ok=True)
+    caminho = pasta / f"importacao_mubisys_{datetime.now():%Y-%m-%d}.csv"
+
+    campos = [
+        "data_vencimento", "valor", "descricao", "fornecedor",
+        "centro_custo", "referencia_externa",
+    ]
+    with open(caminho, "w", newline="", encoding="utf-8-sig") as f:
+        writer = _csv.DictWriter(f, fieldnames=campos, delimiter=";")
+        writer.writeheader()
+        for d in despesas:
+            writer.writerow(
+                {
+                    "data_vencimento": d.get("data_vencimento") or d.get("date"),
+                    "valor": f"{d['valor']:.2f}",
+                    "descricao": d.get("description", "")[:120],
+                    "fornecedor": d.get("supplier") or "Diversos",
+                    "centro_custo": _categoria_para_centro_custo(
+                        _CONFIG_GLOBAL, d.get("category", "")),
+                    "referencia_externa": f"espresso:{d.get('id')}",
+                }
+            )
+    log.info("Arquivo de importação gerado: %s", caminho)
+    return [str(caminho)]
+
+
+# Config global p/ funções standalone (setada pela GUI antes de chamar)
+_CONFIG_GLOBAL: dict = {}
+
 
 
 def _gravar_relatorio_csv(linhas: list[dict]) -> None:

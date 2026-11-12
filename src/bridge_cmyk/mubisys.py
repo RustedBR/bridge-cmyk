@@ -1,8 +1,17 @@
-"""Cliente da API do Mubisys — criação de Contas a Pagar.
+"""Cliente da API do Mubisys — Contas a Pagar.
 
-Base: https://api.mubisys.com/docs (OpenAPI 1.1.0)
+Base: https://api.mubisys.com/docs (OpenAPI 1.1.0 — VERIFICADO em 2026-11-12)
 Auth: header `Access-Token` + `publicKey` no path.
 403 = cliente não possui pacote Mubi Pro (API exige plano Pro).
+
+⚠️ LIMITAÇÃO CONFIRMADA NA DOC PÚBLICA (56 paths parseados):
+   - contas-pagar: apenas GET (listar, listar por id) e provisões GET.
+   - NÃO EXISTE POST/PUT para criar ou alterar títulos a pagar na API
+     pública. Os únicos POSTs são de cadastro: cliente, fornecedor,
+     funil de vendas (9 POSTs no total, nenhum financeiro).
+   → Para CRIAR títulos é preciso verificar com a Mubisys se há API de
+     escrita via contrato/Mubi Pro (indocumentada) OU usar importação
+     por arquivo no painel (o conector gera planilha/CSV de importação).
 """
 from __future__ import annotations
 
@@ -52,16 +61,19 @@ class MubisysClient:
         except URLError as e:
             raise MubisysError(f"Mubisys sem conexão ({e.reason})") from e
 
-    def criar_contas_pagar(self, titulo: dict) -> str:
-        """Cria um título a pagar. Retorna o id do título criado.
+    def listar_contas_pagar(self, **params) -> list[dict]:
+        """GET /contas-pagar — consulta (única via pública confirmada).
 
-        TODO: ajustar o payload exato ao contrato real (campos obrigatórios
-        do POST /{publicKey}/contas-pagar no OpenAPI da Mubisys).
+        Parâmetros obrigatórios na doc: status (TODOS/PENDENTE/VENCIDO/PAGO),
+        filtrodata (EMISSAO/VENCIMENTO/PAGAMENTO), datainicial, datafinal.
         """
-        resp = self._request("POST", "/contas-pagar", titulo)
-        return str(
-            resp.get("id")
-            or resp.get("titulo", {}).get("id")
-            or resp.get("data", {}).get("id")
-            or "?"
-        )
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        resp = self._request("GET", f"/contas-pagar?{qs}" if qs else "/contas-pagar")
+        return resp.get("data") or resp.get("contas") or []
+
+    # ------------------------------------------------------------------
+    # ESCRITA: não documentada na API pública.
+    # Se a Mubisys confirmar endpoints de criação (contrato/Mubi Pro),
+    # implementar aqui com o payload real deles. Enquanto isso, o conector
+    # gera ARQUIVO DE IMPORTAÇÃO (ver sync.gerar_arquivo_importacao).
+    # ------------------------------------------------------------------
