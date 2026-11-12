@@ -1,0 +1,63 @@
+name: build-windows
+
+# Gera BridgeCMYK.exe automaticamente e publica como Release no GitHub.
+# - A cada push na branch master
+# - Também pode rodar manualmente: Actions > build-windows > Run workflow
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+
+      - name: Build BridgeCMYK.exe (onefile)
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name BridgeCMYK --add-data "src;src" src\main.py
+
+      - name: Empacotar com config.example + LEIA-ME
+        shell: pwsh
+        run: |
+          Copy-Item config.example.json dist\config.json
+          Copy-Item LEIA-ME.txt dist\LEIA-ME.txt
+          Compress-Archive -Path dist\* -DestinationPath BridgeCMYK-win64.zip -Force
+
+      - name: Upload artefato (download direto na aba Actions)
+        uses: actions/upload-artifact@v4
+        with:
+          name: BridgeCMYK-win64
+          path: |
+            BridgeCMYK-win64.zip
+            dist/BridgeCMYK.exe
+
+      - name: Criar/atualizar Release com o .exe
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-latest
+          name: Bridge CMYK — build mais recente
+          body: |
+            Última versão compilada automaticamente.
+
+            - **BridgeCMYK.exe** — programa completo (portátil: basta executar)
+            - **BridgeCMYK-win64.zip** — .exe + config.json + LEIA-ME.txt
+
+            Para o instalador com assistente, compilar localmente com
+            `scripts/bridgecmyk_setup.iss` (Inno Setup).
+          files: |
+            dist/BridgeCMYK.exe
+            BridgeCMYK-win64.zip
+          generate_release_notes: false
